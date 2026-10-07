@@ -13,6 +13,17 @@ The prototype compares two pagination approaches:
 
 The included narrative is an artificial test fixture written for layout testing. No real novel text is included.
 
+## Tech Stack
+
+- React
+- TypeScript
+- Vite
+
+## Target Environment
+
+- Windows
+- Chrome
+
 ## Commands
 
 ```bash

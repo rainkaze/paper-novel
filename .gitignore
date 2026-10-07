@@ -11,3 +11,7 @@ coverage/
 Thumbs.db
 output/playwright/
 .playwright-cli/
+test-results/
+playwright-report/
+.idea/
+.vscode/
