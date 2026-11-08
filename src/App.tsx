@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react';
 import { buildDocument, testSizes } from './content';
+import { documentToBlocks } from './adapters/fixtures/fixture-to-document';
+import { txtToBookDocument } from './adapters/txt/txt-to-document';
 import type { Block } from './content-types';
+import type { BookDocument } from './domain/document/types';
 import { paginateExplicit, type ExplicitPage } from './pagination';
 
 type Mode = 'columns' | 'explicit';
@@ -16,12 +19,16 @@ function PaperChrome({ children, pageNumber, className = '', testId }: { childre
   </article>;
 }
 
-function FrontMatter() {
+function FrontMatter({ title, imported }: { title: string; imported: boolean }) {
   return <div className="front-matter">
-    <h1>An Empirical Study of Narrative Structure</h1>
-    <p className="author">Research Department</p>
-    <section className="abstract"><h2>Abstract</h2><p>{abstract}</p></section>
-    <p className="keywords"><strong>Keywords:</strong> narrative structure; observation; reading interface; typography</p>
+    <h1 data-testid="front-matter-title">{title}</h1>
+    <p className="author">{imported ? '本地 TXT · 内存导入' : 'Research Department'}</p>
+    {imported
+      ? <p className="import-cover-note">当前导入仅保存在内存中，刷新后恢复示例文本。</p>
+      : <>
+        <section className="abstract"><h2>Abstract</h2><p>{abstract}</p></section>
+        <p className="keywords"><strong>Keywords:</strong> narrative structure; observation; reading interface; typography</p>
+      </>}
   </div>;
 }
 
@@ -127,7 +134,31 @@ export function App() {
   const [sizeIndex, setSizeIndex] = useState(0);
   const [page, setPage] = useState(0);
   const [explicitPages, setExplicitPages] = useState<ExplicitPage[]>([]);
-  const blocks = useMemo(() => buildDocument(testSizes[sizeIndex].repeat), [sizeIndex]);
+  const [importedDocument, setImportedDocument] = useState<BookDocument | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const fixtureBlocks = useMemo(() => buildDocument(testSizes[sizeIndex].repeat), [sizeIndex]);
+  const blocks = useMemo(() => importedDocument ? documentToBlocks(importedDocument) : fixtureBlocks, [importedDocument, fixtureBlocks]);
+
+  const handleImportTxt = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const book = txtToBookDocument(await file.arrayBuffer(), file.name);
+      setImportedDocument(book);
+      setImportError(null);
+      setPage(0);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : '导入 TXT 失败，请重试。');
+    }
+  };
+
+  const restoreFixture = () => {
+    setImportedDocument(null);
+    setImportError(null);
+    setPage(0);
+  };
 
   const measureRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -150,15 +181,26 @@ export function App() {
     <aside className="control-panel">
       <div className="brand"><span className="brand-mark">PN</span><div><strong>PaperNovel</strong><small>Academic Layout Spike</small></div></div>
       <div className="control-group"><label>Pagination prototype</label><div className="segmented"><button className={mode === 'explicit' ? 'active' : ''} onClick={() => { setMode('explicit'); setPage(0); }}>Explicit pages</button><button className={mode === 'columns' ? 'active' : ''} onClick={() => { setMode('columns'); setPage(0); }}>CSS Columns</button></div></div>
-      <div className="control-group"><label>Test document</label><select value={sizeIndex} onChange={(event) => { setSizeIndex(Number(event.target.value)); setPage(0); }}>{testSizes.map((size, index) => <option value={index} key={size.label}>{size.label}</option>)}</select><small className="muted">{totalCharacters.toLocaleString()} characters · artificial fixture</small></div>
+      <div className="control-group"><label>Test document</label><select value={sizeIndex} disabled={Boolean(importedDocument)} onChange={(event) => { setSizeIndex(Number(event.target.value)); setPage(0); }}>{testSizes.map((size, index) => <option value={index} key={size.label}>{size.label}</option>)}</select><small className="muted">{totalCharacters.toLocaleString()} characters · {importedDocument ? 'local TXT' : 'artificial fixture'}</small></div>
+      <div className="control-group">
+        <label>TXT document</label>
+        <div className="import-actions">
+          <button type="button" data-testid="txt-import-button" onClick={() => fileInputRef.current?.click()}>导入 TXT</button>
+          <button type="button" data-testid="restore-fixture-button" onClick={restoreFixture} disabled={!importedDocument}>恢复示例文本</button>
+          <input ref={fileInputRef} data-testid="txt-file-input" type="file" accept=".txt,text/plain" hidden onChange={handleImportTxt} />
+        </div>
+        <div className="import-title" data-testid="current-document-title">当前文档：{importedDocument ? importedDocument.metadata.title : '示例文本'}</div>
+        {importedDocument && <small className="import-note" data-testid="txt-import-note">当前导入仅保存在内存中，刷新后恢复示例文本。</small>}
+        {importError && <p className="import-error" role="alert" data-testid="txt-import-error">{importError}</p>}
+      </div>
       <div className="control-group"><label>Body font size</label><div className="font-buttons">{([12, 14, 16, 18] as FontSize[]).map((size) => <button className={fontSize === size ? 'active' : ''} onClick={() => { setFontSize(size); setPage(0); }} key={size}>{size}px</button>)}</div></div>
-      <div className="experiment-note"><span className="status-dot" /> Local-only prototype<br /><small>No EPUB, TXT, storage or network features are enabled.</small></div>
+      <div className="experiment-note"><span className="status-dot" /> Local-only prototype<br /><small>In-memory TXT only · no EPUB, IndexedDB, bookshelf or network features.</small></div>
       <div className="metrics"><div><span>Mode</span><strong>{mode === 'explicit' ? 'Measured pages' : 'CSS columns'}</strong></div><div><span>Pages</span><strong>{explicitPages.length || '…'}</strong></div><div><span>Viewport</span><strong>Chrome target</strong></div></div>
     </aside>
     <main className="reading-workspace" data-testid="reading-workspace">
       <div className="workspace-topline"><span>Spike 1 / Paper-like reading surface</span><span>Experiment mode · {mode === 'explicit' ? 'B' : 'A'}</span></div>
       <div className="paper-stack">
-        <PaperChrome className="front-paper"><FrontMatter /></PaperChrome>
+        <PaperChrome className="front-paper"><FrontMatter title={importedDocument ? importedDocument.metadata.title : 'An Empirical Study of Narrative Structure'} imported={Boolean(importedDocument)} /></PaperChrome>
         {mode === 'explicit' ? <ExplicitPages pages={explicitPages.length ? explicitPages : [{ columns: [[], []] }]} page={Math.min(page, Math.max(0, explicitPages.length - 1))} setPage={setPage} /> : <CssColumns pages={explicitPages.length ? explicitPages : [{ columns: [[], []] }]} page={Math.min(page, Math.max(0, explicitPages.length - 1))} setPage={setPage} />}
       </div>
     </main>
