@@ -28,14 +28,14 @@ function FrontMatter() {
 function BlockView({ block }: { block: Block }) {
   if (block.type === 'heading') return <h3 className="section-heading">{block.text}</h3>;
   if (block.type === 'blank') return <div className="blank-block" aria-hidden="true" />;
-  return <p className="body-paragraph">{block.text}</p>;
+  return <p className={block.continuation ? 'body-paragraph continuation' : 'body-paragraph'}>{block.text}</p>;
 }
 
 function ExplicitPages({ pages, page, setPage }: { pages: ExplicitPage[]; page: number; setPage: (page: number) => void }) {
   const current = pages[page];
   return <>
-    <PaperChrome pageNumber={page + 1} className="explicit-paper">
-      <div className="paper-columns explicit-columns">
+    <PaperChrome pageNumber={page + 1} className="explicit-paper" testId="explicit-page">
+      <div className="paper-columns explicit-columns" data-testid="explicit-page-content">
         {current.columns.map((column, index) => <div className="paper-column" key={index}>{column.map((block) => <BlockView block={block} key={block.id} />)}</div>)}
       </div>
     </PaperChrome>
@@ -136,14 +136,14 @@ export function App() {
     const measure = (candidate: Block[]) => {
       node.replaceChildren(...candidate.map((block) => {
         const element = document.createElement(block.type === 'heading' ? 'h3' : 'p');
-        element.className = block.type === 'heading' ? 'section-heading' : block.type === 'blank' ? 'blank-block' : 'body-paragraph';
+        element.className = block.type === 'heading' ? 'section-heading' : block.type === 'blank' ? 'blank-block' : block.continuation ? 'body-paragraph continuation' : 'body-paragraph';
         element.textContent = block.text;
         return element;
       }));
       return node.scrollHeight <= node.clientHeight + 1;
     };
-    setExplicitPages(paginateExplicit(blocks, measure));
-  }, [blocks, fontSize]);
+    setExplicitPages(paginateExplicit(blocks, measure, { fillRemainder: mode === 'explicit' }));
+  }, [blocks, fontSize, mode]);
 
   const totalCharacters = blocks.reduce((sum, block) => sum + block.text.length, 0);
   return <div className="app-shell" style={{ '--body-size': `${fontSize}px` } as CSSProperties}>
