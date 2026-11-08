@@ -78,12 +78,14 @@ export function paginateExplicit(blocks: Block[], measure: (blocks: Block[]) => 
       target.push(block);
       return;
     }
+    const originId = block.originId ?? block.id;
+    const originOffset = block.originOffset ?? 0;
     if (fillRemainder && allowFillSplit) {
       const split = findFittingSentence(block.text, (text) => measure([...target, { ...block, text, continuation: block.continuation }]));
       if (split) {
-        target.push({ ...block, id: `${block.id}-part-${partId++}`, text: split.head, continuation: block.continuation });
+        target.push({ ...block, id: `${block.id}-part-${partId++}`, text: split.head, continuation: block.continuation, originId, originOffset });
         pushColumn();
-        addParagraph({ ...block, id: `${block.id}-part-${partId++}`, text: split.tail, continuation: true }, false);
+        addParagraph({ ...block, id: `${block.id}-part-${partId++}`, text: split.tail, continuation: true, originId, originOffset: originOffset + split.head.length }, false);
         return;
       }
     }
@@ -95,7 +97,11 @@ export function paginateExplicit(blocks: Block[], measure: (blocks: Block[]) => 
     }
     if (block.type === 'paragraph' && block.text.length > 1) {
       const pieces = splitText(block.text, (text) => measure([...page.columns[column], { ...block, text, continuation: block.continuation }]));
-      pieces.forEach((text, index) => addParagraph({ ...block, id: `${block.id}-part-${partId++}`, text, continuation: fillRemainder && (index > 0 || block.continuation) }, false));
+      let consumed = 0;
+      pieces.forEach((text, index) => {
+        addParagraph({ ...block, id: `${block.id}-part-${partId++}`, text, continuation: fillRemainder && (index > 0 || block.continuation), originId, originOffset: originOffset + consumed }, false);
+        consumed += text.length;
+      });
     } else {
       freshTarget.push(block);
     }

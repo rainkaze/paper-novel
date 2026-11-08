@@ -1,11 +1,33 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react';
 import { buildDocument, testSizes } from './content';
 import { documentToBlocks } from './adapters/fixtures/fixture-to-document';
-import { deleteBook, getBook, listBooks, saveBook, type BookSummary } from './adapters/storage/indexeddb';
+import {
+  deleteBook,
+  getBook,
+  getProgress,
+  listBooks,
+  listProgress,
+  saveBook,
+  saveProgress,
+  type BookSummary,
+  type StoredBook,
+} from './adapters/storage/indexeddb';
 import { txtToBookDocument } from './adapters/txt/txt-to-document';
 import type { Block } from './content-types';
-import type { BookDocument } from './domain/document/types';
+import type { BookDocument, ReadingPosition } from './domain/document/types';
 import { paginateExplicit, type ExplicitPage } from './pagination';
+import {
+  buildReadingIndex,
+  createProgressRecord,
+  findPageForPosition,
+  fromStoredMode,
+  getPositionForPage,
+  getProgressLabel,
+  isReaderFontSize,
+  isReaderMode,
+  toStoredMode,
+  type ReadingProgressRecord,
+} from './reading/reading-progress';
 
 type Mode = 'columns' | 'explicit';
 type FontSize = 12 | 14 | 16 | 18;
@@ -156,26 +178,47 @@ export function App() {
   const [importError, setImportError] = useState<string | null>(null);
   const [storageNotice, setStorageNotice] = useState<string | null>(null);
   const [books, setBooks] = useState<BookSummary[]>([]);
+  const [progressByBook, setProgressByBook] = useState<Record<string, ReadingProgressRecord>>({});
   const [shelfLoading, setShelfLoading] = useState(true);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingRestoreRef = useRef<ReadingPosition | null>(null);
+  const restoreTargetRef = useRef<number | null>(null);
+  const pageRef = useRef(page);
   const fixtureBlocks = useMemo(() => buildDocument(testSizes[sizeIndex].repeat), [sizeIndex]);
   const blocks = useMemo(() => currentDocument ? documentToBlocks(currentDocument) : fixtureBlocks, [currentDocument, fixtureBlocks]);
+  const readingIndex = useMemo(() => currentDocument ? buildReadingIndex(currentDocument, blocks) : null, [currentDocument, blocks]);
+
+  useLayoutEffect(() => {
+    pageRef.current = page;
+  }, [page]);
 
   useEffect(() => {
     let cancelled = false;
     const bootstrap = async () => {
       try {
         const summaries = await listBooks();
+        const progressRecords = await listProgress();
         if (cancelled) return;
         setBooks(summaries);
+        setProgressByBook(Object.fromEntries(progressRecords.map((record) => [record.bookId, record])));
         if (summaries.length > 0) {
-          const stored = await getBook(summaries[0].id);
+          const bookId = summaries[0].id;
+          const [stored, progress] = await Promise.all([getBook(bookId), getProgress(bookId)]);
           if (cancelled) return;
           if (stored) {
             setCurrentDocument(stored.document);
             setCurrentBookId(stored.id);
             setCurrentBookSaved(true);
+            if (progress) {
+              setMode(isReaderMode(progress.mode) ? fromStoredMode(progress.mode) : 'explicit');
+              setFontSize(isReaderFontSize(progress.fontSize) ? progress.fontSize : 14);
+              pendingRestoreRef.current = progress.position;
+            } else {
+              setMode('explicit');
+              setFontSize(14);
+              pendingRestoreRef.current = null;
+            }
           }
         }
       } catch (error) {
@@ -190,12 +233,75 @@ export function App() {
     return () => { cancelled = true; };
   }, []);
 
+  const applyBook = (stored: StoredBook, progress: ReadingProgressRecord | null) => {
+    restoreTargetRef.current = null;
+    setCurrentDocument(stored.document);
+    setCurrentBookId(stored.id);
+    setCurrentBookSaved(true);
+    setImportError(null);
+    setPendingDeleteId(null);
+    setStorageNotice(null);
+    setPage(0);
+    if (progress) {
+      setMode(isReaderMode(progress.mode) ? fromStoredMode(progress.mode) : 'explicit');
+      setFontSize(isReaderFontSize(progress.fontSize) ? progress.fontSize : 14);
+      pendingRestoreRef.current = progress.position;
+    } else {
+      setMode('explicit');
+      setFontSize(14);
+      pendingRestoreRef.current = null;
+    }
+  };
+
+  const restoreFixtureView = () => {
+    pendingRestoreRef.current = null;
+    restoreTargetRef.current = null;
+    setCurrentDocument(null);
+    setCurrentBookId(null);
+    setCurrentBookSaved(false);
+    setImportError(null);
+    setPendingDeleteId(null);
+    setPage(0);
+  };
+
+  const currentProgress = (): ReadingProgressRecord | null => {
+    if (!currentBookId || !currentBookSaved || !readingIndex) return null;
+    return createProgressRecord({
+      bookId: currentBookId,
+      pages: explicitPages,
+      pageIndex: page,
+      index: readingIndex,
+      mode: toStoredMode(mode),
+      fontSize,
+    });
+  };
+
+  const flushCurrentProgress = async () => {
+    const record = currentProgress();
+    if (!record) return;
+    try {
+      const saved = await saveProgress(record);
+      setProgressByBook((previous) => ({ ...previous, [saved.bookId]: saved }));
+      setStorageNotice(null);
+    } catch (error) {
+      setStorageNotice(`阅读进度保存失败：${errorMessage(error, '未知错误')}`);
+    }
+  };
+
+  const restoreFixture = async () => {
+    await flushCurrentProgress();
+    restoreFixtureView();
+  };
+
   const handleImportTxt = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    await flushCurrentProgress();
     try {
       const book = txtToBookDocument(await file.arrayBuffer(), file.name);
+      pendingRestoreRef.current = null;
+      restoreTargetRef.current = null;
       setCurrentDocument(book);
       setCurrentBookId(book.bookId);
       setCurrentBookSaved(false);
@@ -215,31 +321,17 @@ export function App() {
     }
   };
 
-  const restoreFixture = () => {
-    setCurrentDocument(null);
-    setCurrentBookId(null);
-    setCurrentBookSaved(false);
-    setImportError(null);
-    setPendingDeleteId(null);
-    setPage(0);
-  };
-
   const openBook = async (id: string) => {
+    await flushCurrentProgress();
     try {
-      const stored = await getBook(id);
+      const [stored, progress] = await Promise.all([getBook(id), getProgress(id)]);
       if (!stored) {
         setStorageNotice('这本书已不存在，请刷新书架后重试。');
         setBooks((previous) => previous.filter((item) => item.id !== id));
-        if (currentBookId === id) restoreFixture();
+        if (currentBookId === id) restoreFixtureView();
         return;
       }
-      setCurrentDocument(stored.document);
-      setCurrentBookId(stored.id);
-      setCurrentBookSaved(true);
-      setImportError(null);
-      setPendingDeleteId(null);
-      setStorageNotice(null);
-      setPage(0);
+      applyBook(stored, progress);
     } catch (error) {
       setStorageNotice(`打开书籍失败：${errorMessage(error, '未知错误')}`);
     }
@@ -251,22 +343,22 @@ export function App() {
       await deleteBook(id);
       const remaining = books.filter((item) => item.id !== id);
       setBooks(remaining);
+      setProgressByBook((previous) => {
+        if (!(id in previous)) return previous;
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
       if (currentBookId === id) {
         if (remaining.length === 0) {
-          restoreFixture();
+          restoreFixtureView();
         } else {
           try {
-            const next = await getBook(remaining[0].id);
-            if (next) {
-              setCurrentDocument(next.document);
-              setCurrentBookId(next.id);
-              setCurrentBookSaved(true);
-              setPage(0);
-            } else {
-              restoreFixture();
-            }
+            const [next, nextProgress] = await Promise.all([getBook(remaining[0].id), getProgress(remaining[0].id)]);
+            if (next) applyBook(next, nextProgress);
+            else restoreFixtureView();
           } catch (error) {
-            restoreFixture();
+            restoreFixtureView();
             setStorageNotice(`删除后打开下一本书失败：${errorMessage(error, '未知错误')}`);
             return;
           }
@@ -276,6 +368,30 @@ export function App() {
     } catch (error) {
       setStorageNotice(`删除书籍失败：${errorMessage(error, '未知错误')}`);
     }
+  };
+
+  const changeMode = (nextMode: Mode) => {
+    if (nextMode === mode) return;
+    if (currentBookId && readingIndex && explicitPages.length > 0) {
+      pendingRestoreRef.current = getPositionForPage(explicitPages, Math.min(page, explicitPages.length - 1), readingIndex);
+      if (!pendingRestoreRef.current) setPage(0);
+    } else {
+      pendingRestoreRef.current = null;
+      setPage(0);
+    }
+    setMode(nextMode);
+  };
+
+  const changeFontSize = (nextSize: FontSize) => {
+    if (nextSize === fontSize) return;
+    if (currentBookId && readingIndex && explicitPages.length > 0) {
+      pendingRestoreRef.current = getPositionForPage(explicitPages, Math.min(page, explicitPages.length - 1), readingIndex);
+      if (!pendingRestoreRef.current) setPage(0);
+    } else {
+      pendingRestoreRef.current = null;
+      setPage(0);
+    }
+    setFontSize(nextSize);
   };
 
   const measureRef = useRef<HTMLDivElement>(null);
@@ -291,20 +407,63 @@ export function App() {
       }));
       return node.scrollHeight <= node.clientHeight + 1;
     };
-    setExplicitPages(paginateExplicit(blocks, measure, { fillRemainder: mode === 'explicit' }));
-  }, [blocks, fontSize, mode]);
+    const pages = paginateExplicit(blocks, measure, { fillRemainder: mode === 'explicit' });
+    setExplicitPages(pages);
+    const pending = pendingRestoreRef.current;
+    if (pending) {
+      const target = readingIndex ? findPageForPosition(pages, readingIndex, pending) : 0;
+      if (target === pageRef.current) {
+        pendingRestoreRef.current = null;
+        restoreTargetRef.current = null;
+      } else {
+        restoreTargetRef.current = target;
+        setPage(target);
+      }
+    }
+  }, [blocks, fontSize, mode, readingIndex]);
+
+  useEffect(() => {
+    if (pendingRestoreRef.current && restoreTargetRef.current === page) {
+      pendingRestoreRef.current = null;
+      restoreTargetRef.current = null;
+    }
+  }, [page]);
+
+  useEffect(() => {
+    if (!currentBookId || !currentBookSaved || !readingIndex || pendingRestoreRef.current) return;
+    const record = createProgressRecord({
+      bookId: currentBookId,
+      pages: explicitPages,
+      pageIndex: page,
+      index: readingIndex,
+      mode: toStoredMode(mode),
+      fontSize,
+    });
+    if (!record) return;
+    const timer = window.setTimeout(() => {
+      void saveProgress(record)
+        .then((saved) => {
+          setProgressByBook((previous) => ({ ...previous, [saved.bookId]: saved }));
+          setStorageNotice(null);
+        })
+        .catch((error) => {
+          setStorageNotice(`阅读进度保存失败：${errorMessage(error, '未知错误')}`);
+        });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [page, mode, fontSize, currentBookId, currentBookSaved, explicitPages, readingIndex]);
 
   const totalCharacters = blocks.reduce((sum, block) => sum + block.text.length, 0);
   return <div className="app-shell" style={{ '--body-size': `${fontSize}px` } as CSSProperties}>
     <aside className="control-panel">
       <div className="brand"><span className="brand-mark">PN</span><div><strong>PaperNovel</strong><small>Academic Layout Spike</small></div></div>
-      <div className="control-group"><label>Pagination prototype</label><div className="segmented"><button className={mode === 'explicit' ? 'active' : ''} onClick={() => { setMode('explicit'); setPage(0); }}>Explicit pages</button><button className={mode === 'columns' ? 'active' : ''} onClick={() => { setMode('columns'); setPage(0); }}>CSS Columns</button></div></div>
+      <div className="control-group"><label>Pagination prototype</label><div className="segmented"><button className={mode === 'explicit' ? 'active' : ''} onClick={() => changeMode('explicit')}>Explicit pages</button><button className={mode === 'columns' ? 'active' : ''} onClick={() => changeMode('columns')}>CSS Columns</button></div></div>
       <div className="control-group"><label>Test document</label><select value={sizeIndex} disabled={Boolean(currentDocument)} onChange={(event) => { setSizeIndex(Number(event.target.value)); setPage(0); }}>{testSizes.map((size, index) => <option value={index} key={size.label}>{size.label}</option>)}</select><small className="muted">{totalCharacters.toLocaleString()} characters · {currentDocument ? 'local TXT' : 'artificial fixture'}</small></div>
       <div className="control-group">
         <label>TXT document</label>
         <div className="import-actions">
           <button type="button" data-testid="txt-import-button" onClick={() => fileInputRef.current?.click()}>导入 TXT</button>
-          <button type="button" data-testid="restore-fixture-button" onClick={restoreFixture} disabled={!currentDocument}>恢复示例文本</button>
+          <button type="button" data-testid="restore-fixture-button" onClick={() => { void restoreFixture(); }} disabled={!currentDocument}>恢复示例文本</button>
           <input ref={fileInputRef} data-testid="txt-file-input" type="file" accept=".txt,text/plain" hidden onChange={handleImportTxt} />
         </div>
         <div className="import-title" data-testid="current-document-title">当前文档：{currentDocument ? currentDocument.metadata.title : '示例文本'}</div>
@@ -319,29 +478,37 @@ export function App() {
           <p className="shelf-empty" data-testid="bookshelf-empty">书架为空。导入 TXT 后会保存在这里。</p>
         ) : (
           <div className="bookshelf-list" data-testid="bookshelf-list">
-            {books.map((book) => (
-              <div className={`bookshelf-item${currentBookId === book.id ? ' active' : ''}`} data-testid="bookshelf-item" key={book.id}>
-                <button type="button" className="bookshelf-title" data-testid="bookshelf-open" onClick={() => { void openBook(book.id); }}>{book.title}</button>
-                <div className="bookshelf-meta">{book.chapterCount} 章 · {book.characterCount.toLocaleString('zh-CN')} 字 · {formatImportedAt(book.importedAt)}</div>
-                {pendingDeleteId === book.id ? (
-                  <div className="bookshelf-confirm">
-                    <span>删除《{book.title}》？</span>
-                    <button type="button" className="bookshelf-confirm-delete" data-testid="bookshelf-confirm-delete" onClick={() => { void handleDeleteBook(book.id); }}>确认删除</button>
-                    <button type="button" className="bookshelf-cancel-delete" data-testid="bookshelf-cancel-delete" onClick={() => setPendingDeleteId(null)}>取消</button>
+            {books.map((book) => {
+              const progress = progressByBook[book.id];
+              const progressLabel = getProgressLabel(progress);
+              return (
+                <div className={`bookshelf-item${currentBookId === book.id ? ' active' : ''}`} data-testid="bookshelf-item" key={book.id}>
+                  <button type="button" className="bookshelf-title" data-testid="bookshelf-open" onClick={() => { void openBook(book.id); }}>{book.title}</button>
+                  <div className="bookshelf-meta">{book.chapterCount} 章 · {book.characterCount.toLocaleString('zh-CN')} 字 · {formatImportedAt(book.importedAt)}</div>
+                  <div className="bookshelf-meta bookshelf-progress-row">
+                    {currentBookId === book.id && <span className="bookshelf-current" data-testid="bookshelf-item-current">当前</span>}
+                    <span data-testid="bookshelf-progress" data-mode={progress?.mode ?? 'none'} data-font-size={progress?.fontSize ?? 0}>{progressLabel}</span>
                   </div>
-                ) : (
-                  <div className="bookshelf-actions">
-                    <button type="button" className="bookshelf-delete" data-testid="bookshelf-delete" onClick={() => setPendingDeleteId(book.id)}>删除</button>
-                  </div>
-                )}
-              </div>
-            ))}
+                  {pendingDeleteId === book.id ? (
+                    <div className="bookshelf-confirm">
+                      <span>删除《{book.title}》？</span>
+                      <button type="button" className="bookshelf-confirm-delete" data-testid="bookshelf-confirm-delete" onClick={() => { void handleDeleteBook(book.id); }}>确认删除</button>
+                      <button type="button" className="bookshelf-cancel-delete" data-testid="bookshelf-cancel-delete" onClick={() => setPendingDeleteId(null)}>取消</button>
+                    </div>
+                  ) : (
+                    <div className="bookshelf-actions">
+                      <button type="button" className="bookshelf-delete" data-testid="bookshelf-delete" onClick={() => setPendingDeleteId(book.id)}>删除</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         {storageNotice && <p className="storage-notice" role="status" data-testid="storage-notice">{storageNotice}</p>}
       </div>
-      <div className="control-group"><label>Body font size</label><div className="font-buttons">{([12, 14, 16, 18] as FontSize[]).map((size) => <button className={fontSize === size ? 'active' : ''} onClick={() => { setFontSize(size); setPage(0); }} key={size}>{size}px</button>)}</div></div>
-      <div className="experiment-note"><span className="status-dot" /> 本地原型<br /><small>本地 IndexedDB 书架 · 暂无 EPUB 与阅读进度。</small></div>
+      <div className="control-group"><label>Body font size</label><div className="font-buttons">{([12, 14, 16, 18] as FontSize[]).map((size) => <button className={fontSize === size ? 'active' : ''} onClick={() => changeFontSize(size)} key={size}>{size}px</button>)}</div></div>
+      <div className="experiment-note"><span className="status-dot" /> 本地原型<br /><small>本地 IndexedDB 书架与阅读进度 · 暂无 EPUB。</small></div>
       <div className="metrics"><div><span>Mode</span><strong>{mode === 'explicit' ? 'Measured pages' : 'CSS columns'}</strong></div><div><span>Pages</span><strong>{explicitPages.length || '…'}</strong></div><div><span>Viewport</span><strong>Chrome target</strong></div></div>
     </aside>
     <main className="reading-workspace" data-testid="reading-workspace">
