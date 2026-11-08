@@ -11,19 +11,21 @@ async function pageState(page: Page) {
   return { current, total };
 }
 
-test('imports a UTF-8 TXT document into memory and restores the fixture', async ({ page }) => {
+test('imports a UTF-8 TXT document and persists it across refresh', async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto('/');
   await expect(page.getByTestId('reading-workspace')).toBeVisible();
   const fixtureSource = await page.getByTestId('fixture-source').textContent();
   await expect(page.getByTestId('current-document-title')).toContainText('示例文本');
+  await expect(page.getByTestId('bookshelf-empty')).toBeVisible();
 
   await page.getByTestId('txt-file-input').setInputFiles(FIXTURE_PATH);
   await expect(page.getByTestId('current-document-title')).toContainText(DOCUMENT_TITLE);
   await expect(page.getByTestId('front-matter-title')).toContainText(DOCUMENT_TITLE);
-  await expect(page.getByTestId('txt-import-note')).toContainText('当前导入仅保存在内存中，刷新后恢复示例文本');
+  await expect(page.getByTestId('txt-import-note')).toContainText('已保存到本地书架，刷新后仍会保留。');
   await expect(page.getByTestId('txt-import-error')).toHaveCount(0);
   await expect(page.getByTestId('restore-fixture-button')).toBeEnabled();
+  await expect(page.getByTestId('bookshelf-item').filter({ hasText: DOCUMENT_TITLE })).toBeVisible();
 
   await page.getByRole('button', { name: '18px' }).click();
   await expect.poll(async () => (await pageState(page)).total).toBeGreaterThan(1);
@@ -48,14 +50,15 @@ test('imports a UTF-8 TXT document into memory and restores the fixture', async 
   await expect(page.getByTestId('front-matter-title')).toContainText('An Empirical Study of Narrative Structure');
   await expect(page.getByTestId('txt-import-note')).toHaveCount(0);
   expect(await page.getByTestId('fixture-source').textContent()).toBe(fixtureSource);
+  await expect(page.getByTestId('bookshelf-item').filter({ hasText: DOCUMENT_TITLE })).toBeVisible();
 
-  await page.getByTestId('txt-file-input').setInputFiles(FIXTURE_PATH);
-  await expect(page.getByTestId('current-document-title')).toContainText(DOCUMENT_TITLE);
   await page.reload();
-  await expect(page.getByTestId('current-document-title')).toContainText('示例文本');
-  await expect(page.getByTestId('front-matter-title')).toContainText('An Empirical Study of Narrative Structure');
-  await expect(page.getByTestId('txt-import-note')).toHaveCount(0);
-  expect(await page.getByTestId('fixture-source').textContent()).toBe(fixtureSource);
+  await expect(page.getByTestId('current-document-title')).toContainText(DOCUMENT_TITLE);
+  await expect(page.getByTestId('front-matter-title')).toContainText(DOCUMENT_TITLE);
+  await expect(page.getByTestId('txt-import-note')).toContainText('已保存到本地书架，刷新后仍会保留。');
+  await expect(page.getByTestId('bookshelf-item').filter({ hasText: DOCUMENT_TITLE })).toBeVisible();
+  const persistedSource = await page.getByTestId('fixture-source').textContent();
+  expect(normalize(persistedSource ?? '')).toBe(normalize(readFileSync(FIXTURE_PATH, 'utf8')));
 });
 
 test('shows a readable error for non-UTF-8 input', async ({ page }) => {
