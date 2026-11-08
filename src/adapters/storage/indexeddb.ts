@@ -1,11 +1,13 @@
 import { getParagraphText } from '../../domain/document/text';
 import type { BookDocument } from '../../domain/document/types';
+import type { ReadingProgressRecord } from '../../reading/reading-progress';
 
 export const DB_NAME = 'paper-novel-library';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 export const BOOKS_STORE = 'books';
 export const DOCUMENTS_STORE = 'documents';
 export const META_STORE = 'meta';
+export const PROGRESS_STORE = 'progress';
 
 export type BookSourceType = 'fixture' | 'txt';
 
@@ -80,6 +82,9 @@ function openDatabase(): Promise<IDBDatabase> {
       }
       if (!database.objectStoreNames.contains(META_STORE)) {
         database.createObjectStore(META_STORE, { keyPath: 'key' });
+      }
+      if (!database.objectStoreNames.contains(PROGRESS_STORE)) {
+        database.createObjectStore(PROGRESS_STORE, { keyPath: 'bookId' });
       }
       const metaStore = request.transaction?.objectStore(META_STORE);
       metaStore?.put({ key: 'schemaVersion', value: DB_VERSION } satisfies MetaRecord);
@@ -216,12 +221,60 @@ export async function getBook(id: string): Promise<StoredBook | null> {
   });
 }
 
-/** 删除一本书及其正文；不存在时静默完成。 */
+/** 删除一本书及其正文、阅读进度；不存在时静默完成。 */
 export async function deleteBook(id: string): Promise<void> {
   await withDatabase(async (database) => {
-    const transaction = database.transaction([BOOKS_STORE, DOCUMENTS_STORE], 'readwrite');
+    const transaction = database.transaction([BOOKS_STORE, DOCUMENTS_STORE, PROGRESS_STORE], 'readwrite');
     transaction.objectStore(BOOKS_STORE).delete(id);
     transaction.objectStore(DOCUMENTS_STORE).delete(id);
+    transaction.objectStore(PROGRESS_STORE).delete(id);
     await transactionDone(transaction);
+  });
+}
+
+/** 保存阅读进度与偏好；以当前时间刷新 updatedAt。 */
+export async function saveProgress(record: ReadingProgressRecord): Promise<ReadingProgressRecord> {
+  if (!record.bookId) {
+    throw new StorageError('阅读进度缺少书籍标识，无法保存。');
+  }
+  const saved = { ...record, updatedAt: Date.now() };
+  await withDatabase(async (database) => {
+    const transaction = database.transaction(PROGRESS_STORE, 'readwrite');
+    const done = transactionDone(transaction);
+    transaction.objectStore(PROGRESS_STORE).put(saved);
+    await done;
+  });
+  return saved;
+}
+
+/** 读取指定书籍的阅读进度；不存在时返回 null。 */
+export async function getProgress(bookId: string): Promise<ReadingProgressRecord | null> {
+  return withDatabase(async (database) => {
+    const transaction = database.transaction(PROGRESS_STORE, 'readonly');
+    const done = transactionDone(transaction);
+    const record = await requestToPromise<ReadingProgressRecord | undefined>(transaction.objectStore(PROGRESS_STORE).get(bookId));
+    await done;
+    return record ?? null;
+  });
+}
+
+/** 读取全部阅读进度；不加载书籍正文。 */
+export async function listProgress(): Promise<ReadingProgressRecord[]> {
+  return withDatabase(async (database) => {
+    const transaction = database.transaction(PROGRESS_STORE, 'readonly');
+    const done = transactionDone(transaction);
+    const records = await requestToPromise<ReadingProgressRecord[]>(transaction.objectStore(PROGRESS_STORE).getAll());
+    await done;
+    return records.sort((left, right) => right.updatedAt - left.updatedAt);
+  });
+}
+
+/** 删除指定书籍的阅读进度；不存在时静默完成。 */
+export async function deleteProgress(bookId: string): Promise<void> {
+  await withDatabase(async (database) => {
+    const transaction = database.transaction(PROGRESS_STORE, 'readwrite');
+    const done = transactionDone(transaction);
+    transaction.objectStore(PROGRESS_STORE).delete(bookId);
+    await done;
   });
 }
