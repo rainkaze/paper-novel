@@ -1,30 +1,30 @@
 # PaperNovel
 
-PaperNovel is a local-first reading interface experiment that presents fictional narrative text in an academic-paper visual language.
+PaperNovel 是一个本地优先的阅读界面实验，用学术论文的视觉语言呈现虚构叙事文本。
 
-## Spike 1: academic paper layout
+## Spike 1：学术论文式版面
 
-This repository currently contains only the paper-like reader prototype. It intentionally does **not** implement EPUB, TXT import, IndexedDB, a bookshelf, accounts, a backend, AI, or a Chrome extension.
+本仓库目前只包含论文式阅读器原型。它有意**不**实现 EPUB、TXT 导入、IndexedDB、书架、账号、后端、AI 或 Chrome 扩展。
 
-The prototype compares two pagination approaches:
+原型对比两种分页方案：
 
-- **Prototype A — CSS Columns:** a fixed A4-like page uses a two-column CSS layout and horizontal page translation.
-- **Prototype B — Explicit pages:** a hidden DOM measurement column greedily distributes blocks into two-column page models and splits overlong paragraphs.
+- **方案 A —— CSS Columns：** 固定 A4 式页面使用双栏 CSS 布局与横向翻页位移。
+- **方案 B —— Explicit pages：** 隐藏的 DOM 测量栏将文本块贪心分配到双栏页面模型，并对超长段落进行切分。
 
-The included narrative is an artificial test fixture written for layout testing. No real novel text is included.
+仓库附带的叙事文本是为版面测试编写的人工 fixture，不包含真实小说文本。
 
-## Tech Stack
+## 技术栈
 
 - React
 - TypeScript
 - Vite
 
-## Target Environment
+## 目标环境
 
 - Windows
 - Chrome
 
-## Commands
+## 命令
 
 ```bash
 npm install
@@ -35,8 +35,12 @@ npm run test
 npm run build
 ```
 
-## Current limitations
+## 当前限制
 
-- The explicit paginator is an experimental greedy algorithm, not a production pagination engine.
-- CSS Columns is intentionally implemented as a comparison prototype, not a final reading architecture.
-- Text is generated from a small artificial fixture and is not an EPUB/TXT ingestion test.
+- Explicit 分页器是实验性的贪心算法，不是生产级分页引擎。
+- CSS Columns 是有意保留的对照原型，不是最终阅读架构。
+- 文本由小型人工 fixture 生成，尚不是 EPUB/TXT 导入测试。
+
+## 文档语言约定
+
+项目说明文档默认使用中文。代码标识符、命令、文件路径与专有名词（如 React、TypeScript、Vite、Playwright、IndexedDB）保留英文。
