@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { buildDocument, testSizes, type Block } from './content';
+import { buildDocument, testSizes } from './content';
+import type { Block } from './content-types';
 import { paginateExplicit, type ExplicitPage } from './pagination';
 
 type Mode = 'columns' | 'explicit';

@@ -1,4 +1,8 @@
-export type Block = { id: string; type: 'heading' | 'paragraph' | 'blank'; text: string };
+import { documentToBlocks, blocksToFixtureDocument } from './adapters/fixtures/fixture-to-document';
+import type { Block } from './content-types';
+import type { BookDocument } from './domain/document/types';
+
+export type { Block } from './content-types';
 
 const seedBlocks: Block[] = [
   { id: 'h-1', type: 'heading', text: '1 引言：纸张边缘的微光' },
@@ -27,15 +31,19 @@ const seedBlocks: Block[] = [
 
 const paragraphTail = '后来，林岑发现窗外已经天亮。新的光线覆盖了旧的阴影，却没有抹掉它们的边界。他把这一段写进记录，又在下一页重复了一遍，因为重复本身也是一种观察。';
 
-export function buildDocument(repeat = 1): Block[] {
-  const result = [...seedBlocks];
+export function buildBookDocument(repeat = 1): BookDocument {
+  const blocks = [...seedBlocks];
   for (let i = 0; i < repeat; i += 1) {
-    result.push({ id: `h-repeat-${i}`, type: 'heading', text: `${6 + i} 附录：重复观察 ${i + 1}` });
+    blocks.push({ id: `h-repeat-${i}`, type: 'heading', text: `${6 + i} 附录：重复观察 ${i + 1}` });
     for (let j = 0; j < 7; j += 1) {
-      result.push({ id: `p-repeat-${i}-${j}`, type: 'paragraph', text: `${paragraphTail} ${seedBlocks[(j + i) % seedBlocks.length].text}` });
+      blocks.push({ id: `p-repeat-${i}-${j}`, type: 'paragraph', text: `${paragraphTail} ${seedBlocks[(j + i) % seedBlocks.length].text}` });
     }
   }
-  return result;
+  return blocksToFixtureDocument(blocks, repeat);
+}
+
+export function buildDocument(repeat = 1): Block[] {
+  return documentToBlocks(buildBookDocument(repeat));
 }
 
 export const testSizes = [
